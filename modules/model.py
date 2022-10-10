@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch_geometric.nn import ChebConv, GATConv, GCNConv, SAGEConv, SGConv
 
-
+# TODO проверить что edge index  data -- отражает НЕнаправленный граф
 class Net(torch.nn.Module):
     def __init__(
         self,

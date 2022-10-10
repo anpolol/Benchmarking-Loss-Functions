@@ -1,5 +1,4 @@
 import random
-
 import torch
 from torch_geometric.utils import subgraph
 
@@ -12,9 +11,9 @@ class NegativeSampler:
 
     @staticmethod
     def not_less_than(num_negative_samples, all_negative_samples):
-        if len(all_negative_samples) == 0:
+        if len(all_negative_samples) <= num_negative_samples:
             return all_negative_samples
-        if len(all_negative_samples) >= num_negative_samples:
+        if len(all_negative_samples) > num_negative_samples:
             return random.choices(all_negative_samples, k=num_negative_samples)  # l[:k]
 
     def adj_list(self, edge_index):  # считаем список рёбер из edge_index
@@ -29,9 +28,9 @@ class NegativeSampler:
     def torch_list(self, adj_list):
         line = list()
         other_line = list()
-        for node, neghbors in adj_list.items():
-            line += [node] * len(neghbors)
-            other_line += neghbors
+        for node, neighbors in adj_list.items():
+            line += [node] * len(neighbors)
+            other_line += neighbors
         return torch.transpose((torch.tensor([line, other_line])), 0, 1)
 
     def negative_sampling(self, batch, num_negative_samples):
@@ -44,10 +43,11 @@ class NegativeSampler:
         batch = batch.tolist()
         for node in batch:
             g[node] = batch
-        for node, neghbors in Adj.items():
-            g[node] = list(
-                set(batch) - set(neghbors)
-            )  # тут все элементы которые не являются соседянями, но при этом входят в батч
+
+        for node, neighbors in Adj.items():
+            g[node] = list(set(
+                set(batch) - set(neighbors)
+            )-set([node])) # тут все элементы которые не являются соседними, но при этом входят в батч
         for node, neg_elem in g.items():
             g[node] = self.not_less_than(
                 num_negative_samples, g[node]
