@@ -17,6 +17,9 @@ class Net(torch.nn.Module):
         out_layer=128,
         dropout=0,
         num_layers=2,
+        hidden_layer_for_classifier=128,
+        number_of_layers_for_classifier=2,
+        heads=1
     ):
         super(Net, self).__init__()
         self.mode = mode
@@ -32,13 +35,39 @@ class Net(torch.nn.Module):
         self.dropout = dropout
         self.device = device
         self.history = []
+        out_channels = self.out_layer
+        self.heads = heads
 
         if self.mode == "unsupervised":
-            out_channels = self.out_layer
+            if loss_function["loss var"] == "Random Walks":
+                self.loss = self.lossRandomWalks
+            elif loss_function["loss var"] == "Context Matrix":
+                self.loss = self.lossContextMatrix
+            elif loss_function["loss var"] == "Factorization":
+                self.loss = self.lossFactorization
+            elif loss_function["loss var"] == "Laplacian EigenMaps":
+                self.loss = self.lossLaplacianEigenMaps
+            elif loss_function["loss var"] == "Force2Vec":
+                self.loss = self.lossTdistribution
+
         elif self.mode == "supervised":
-            out_channels = len(
+
+            self.num_classes = len(
                 collections.Counter(self.data.y.tolist()).keys()
-            )  # 128 FOR LINK PREDICTION, FOR NODE CLASSIFICATION UNCOMMENT
+            )
+            self.hidden_layer_for_classifier = hidden_layer_for_classifier
+            self.number_of_layers_for_classifier = number_of_layers_for_classifier
+
+            self.classifier = torch.nn.ModuleList()
+            if self.number_of_layers_for_classifier==1:
+                self.classifier.append(torch.nn.Linear(self.heads*out_channels, self.num_classes))
+            else:
+                self.classifier.append(torch.nn.Linear(self.heads*out_channels, self.hidden_layer_for_classifier))
+                for i in range(1,self.number_of_layers_for_classifier-1):
+                    self.classifier.append(torch.nn.Linear(self.hidden_layer_for_classifier, self.hidden_layer_for_classifier))
+                self.classifier.append(torch.nn.Linear(self.hidden_layer_for_classifier, self.num_classes))
+
+
         if self.conv == "GCN":
             if self.num_layers == 1:
                 self.convs.append(GCNConv(self.num_features, out_channels))
@@ -58,23 +87,13 @@ class Net(torch.nn.Module):
                 self.convs.append(SAGEConv(self.hidden_layer, out_channels))
         elif self.conv == "GAT":
             if self.num_layers == 1:
-                self.convs.append(GATConv(self.num_features, out_channels))
+                self.convs.append(GATConv(self.num_features, out_channels,heads=self.heads))
             else:
-                self.convs.append(GATConv(self.num_features, self.hidden_layer))
+                self.convs.append(GATConv(self.num_features, self.hidden_layer, heads=self.heads))
                 for i in range(1, self.num_layers - 1):
-                    self.convs.append(GATConv(self.hidden_layer, self.hidden_layer))
-                self.convs.append(GATConv(self.hidden_layer, out_channels))
+                    self.convs.append(GATConv(self.heads*self.hidden_layer, self.hidden_layer,heads=self.heads))
+                self.convs.append(GATConv(self.heads*self.hidden_layer, out_channels,heads=self.heads))
 
-        if loss_function["loss var"] == "Random Walks":
-            self.loss = self.lossRandomWalks
-        elif loss_function["loss var"] == "Context Matrix":
-            self.loss = self.lossContextMatrix
-        elif loss_function["loss var"] == "Factorization":
-            self.loss = self.lossFactorization
-        elif loss_function["loss var"] == "Laplacian EigenMaps":
-            self.loss = self.lossLaplacianEigenMaps
-        elif loss_function["loss var"] == "Force2Vec":
-            self.loss = self.lossTdistribution
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -82,8 +101,10 @@ class Net(torch.nn.Module):
             conv.reset_parameters()
 
     def forward(self, x, adjs):
+
         for i, (edge_index, _, size) in enumerate(adjs):
             x_target = x[: size[1]]  # Target nodes are always placed first.
+           # print(size)
             x = self.convs[i]((x, x_target), edge_index)
             if i != self.num_layers - 1:
                 x = F.relu(x)
@@ -91,14 +112,15 @@ class Net(torch.nn.Module):
         if self.mode == "unsupervised":
             return x
         elif self.mode == "supervised":
+            for j in range(self.number_of_layers_for_classifier):
+                x = self.classifier[j](x)
+                x = F.relu(x)
             return x.log_softmax(dim=1)
 
     def inference(self, data, dp=0):
 
         x, edge_index, edge_weight = data.x, data.edge_index, data.edge_attr
-
         for i, conv in enumerate(self.convs):
-
             x = conv(x, edge_index)
             if i != self.num_layers - 1:
                 x = x.relu()
@@ -106,6 +128,9 @@ class Net(torch.nn.Module):
         if self.mode == "unsupervised":  # ONLY FOR LINK PREDICTION
             return x
         elif self.mode == "supervised":
+            for j in range(self.number_of_layers_for_classifier):
+                x = self.classifier[j](x)
+                x = F.relu(x)
             return x.log_softmax(dim=-1)
 
     def lossRandomWalks(self, out, PosNegSamples):
