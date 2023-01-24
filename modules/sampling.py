@@ -33,20 +33,26 @@ class Sampler:
 
     def edge_index_to_adj_train(self, batch):
         x_new = torch.sort(batch).values
-        # долго работает наверное из-за .nonzero(as_tuple =True)
         d_2 = datetime.now()
 
         x_new = x_new.tolist()
+        mapping = {}
+        i=0
+        for value in (x_new):
+            if value not in mapping:
+                mapping[value] = i
+                i+=1
 
         A = torch.zeros((len(x_new), len(x_new)), dtype=torch.long)  # .to(self.device)
+
         edge_index_0 = self.data.edge_index[0].tolist()
         edge_index_1 = self.data.edge_index[1].tolist()
         for j, i in enumerate(edge_index_0):
             if i in x_new:
                 if edge_index_1[j] in x_new:
-                    A[i][edge_index_1[j]] = 1
+                    A[mapping[i]][mapping[edge_index_1[j]]] = 1
 
-        return A
+        return A,mapping
 
     def edge_index_to_adj_train_old(self, mask, batch):
         x_new = torch.tensor(np.where(mask == True)[0], dtype=torch.int32)
@@ -69,7 +75,7 @@ class Sampler:
         return A
 
     @abc.abstractmethod
-    def sample(self, batch, **kwargs):
+    def sample(self, batch, train_flag,**kwargs):
         pass
 
 
@@ -78,10 +84,10 @@ class SamplerWithNegSamples(Sampler):
         Sampler.__init__(self, datasetname, data, device, mask, loss_info, **kwargs)
         self.num_negative_samples = self.loss["num_negative_samples"]
 
-    def sample(self, batch):
+    def sample(self, batch,train_flag):
         if not isinstance(batch, torch.Tensor):
             batch = torch.tensor(batch, dtype=torch.long).to(self.device)
-        return (self.pos_sample(batch), self.neg_sample(batch))
+        return (self.pos_sample(batch,train_flag), self.neg_sample(batch))
 
     @abc.abstractmethod
     def pos_sample(self, batch):
@@ -174,19 +180,23 @@ class SamplerContextMatrix(SamplerWithNegSamples):
         if self.loss["C"] == "PPR":
             self.alpha = round(self.loss["alpha"], 1)
 
-    def pos_sample(self, batch, **kwargs):
+    def pos_sample(self, batch, train_flag, **kwargs):
+        if train_flag:
+            name_postfix = 'train'
+        else:
+            name_postfix = 'test'
         d_pb = datetime.now()
         batch = batch
         pos_batch = []
         d = datetime.now()
         if self.loss["C"] == "Adj" and (self.loss["Name"] == "LINE" or self.loss["Name"] == "Force2Vec"):
-            name = f"{self.help_dir}/pos_samples_LINE_" + self.datasetname + ".pickle"
+            name = f"{self.help_dir}/pos_samples_LINE_"+self.datasetname+'_'+str(name_postfix)+".pickle"
             if os.path.exists(name):
                 with open(name, "rb") as f:
                     pos_batch = pickle.load(f)
             else:
-                A = self.edge_index_to_adj_train(batch)
-                pos_batch = self.convert_to_samples(batch, A)
+                A,mapping = self.edge_index_to_adj_train(batch)
+                pos_batch = self.convert_to_samples(batch,mapping, A)
                 with open(name, "wb") as f:
                     pickle.dump(pos_batch, f)
         elif self.loss["C"] == "Adj" and self.loss["Name"] == "VERSE_Adj":
@@ -260,15 +270,15 @@ class SamplerContextMatrix(SamplerWithNegSamples):
         return pos_batch
 
     @staticmethod
-    def convert_to_samples(batch, A):
+    def convert_to_samples(batch, mapping, A):
         pos_batch = []
         batch_l = batch.tolist()
         for x in batch_l:
             # print('{}/{}'.format(x,len(batch_l)))
             for j in batch_l:
                 # print(x,j,'in',len(batch_l))
-                if A[x][j] != torch.tensor(0):
-                    pos_batch.append([int(x), int(j), A[x][j]])
+                if A[mapping[x]][mapping[j]] != torch.tensor(0):
+                    pos_batch.append([int(mapping[x]), int(mapping[j]), A[mapping[x]][mapping[j]]])
 
         return torch.tensor(pos_batch)
 

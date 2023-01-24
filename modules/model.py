@@ -159,12 +159,12 @@ class Net(torch.nn.Module):
         (pos_rw, neg_rw) = PosNegSamples
         pos_rw = pos_rw.to(self.device)
         neg_rw = neg_rw.to(self.device)
-
+       # print(neg_rw)
         start, rest = neg_rw[:, 0].type(torch.LongTensor), neg_rw[:, 1:].type(torch.LongTensor).contiguous()
         indices = start != rest.view(-1)
         start = start[indices]
+
         h_start = out[start].view(start.shape[0], 1, self.out_layer)
-        rest = rest.view(-1)
         rest = rest[indices]
         # print('neg',start,rest)
         h_rest = out[rest].view(rest.shape[0], -1, self.out_layer)
